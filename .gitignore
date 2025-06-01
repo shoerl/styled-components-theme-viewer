@@ -1,0 +1,80 @@
+.gradle
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### IntelliJ IDEA ###
+.idea/modules.xml
+.idea/jarRepositories.xml
+.idea/compiler.xml
+.idea/libraries/
+*.iws
+*.iml
+*.ipr
+out/
+!**/src/main/**/out/
+!**/src/test/**/out/
+
+### Eclipse ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+bin/
+!**/src/main/**/bin/
+!**/src/test/**/bin/
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+### VS Code ###
+.vscode/
+
+### Mac OS ###
+.DS_Store
+
+# IntelliJ project files
+.idea/
+*.iml
+
+# Gradle
+.gradle/
+build/
+out/
+
+# IntelliJ Platform Plugin cache
+.intellijPlatform/
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# JetBrains run configurations (optional to ignore)
+*.iws
+*.ipr
+
+# Node (if you use Node.js for frontend components or tooling)
+node_modules/
+dist/
+
+# Kotlin/Java build artifacts
+*.class
+*.jar
+*.war
+*.ear
+
+# Other tooling (optional based on setup)
+.vscode/
+.env
+*.swp
