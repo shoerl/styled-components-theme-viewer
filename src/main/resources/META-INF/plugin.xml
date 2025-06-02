@@ -1,28 +1,23 @@
-<!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
 <idea-plugin>
-    <!-- Unique identifier of the plugin. It should be FQN. It cannot be changed between the plugin versions. -->
-    <id>com.example.StyledComponentsThemeViewer</id>
+  <id>com.example.themejsoncompletion</id>
+  <name>ThemeJsonCompletion</name>
+  <version>1.0-SNAPSHOT</version>
+  
+  <!-- Core platform -->
+  <depends>com.intellij.modules.platform</depends>
+  
+  <!-- JavaScript/TypeScript support (bundled in IU) -->
+  <depends>JavaScript</depends>
+  <depends>NodeJS</depends>
+  
+  <vendor email="you@example.com" url="https://example.com">Your Name</vendor>
+  <description>
+    Provides autocomplete for keys in theme.json within JS/TS/JSX/TSX files.
+  </description>
 
-    <!-- Public plugin name should be written in Title Case.
-         Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-name -->
-    <name>StyledComponentsThemeViewer</name>
-
-    <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
-    <vendor url="https://www.yourcompany.com">YourCompany</vendor>
-
-    <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
-         Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-description -->
-    <description>fasdfsdfsadfsadfsdfasdfsdafsdfsdafasdfdfff f fhey</description>
-
-    <!-- Product and plugin compatibility requirements.
-         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
-    <depends>com.intellij.modules.platform</depends>
-    <depends>JavaScript</depends>
-    <depends>NodeJS</depends>
-
-    <!-- Extension points defined by the plugin.
-         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
-    <extensions defaultExtensionNs="com.intellij">
-
-    </extensions>
+  <extensions defaultExtensionNs="com.intellij">
+    <completion.contributor language="JavaScript" implementation="com.example.themejsoncompletion.ThemeJsonCompletionContributor"/>
+    <completion.contributor language="TypeScript" implementation="com.example.themejsoncompletion.ThemeJsonCompletionContributor"/>
+    <postStartupActivity implementation="com.example.themejsoncompletion.ThemeJsonStartupActivity"/>
+  </extensions>
 </idea-plugin>

@@ -1,0 +1,4 @@
+{
+  "theme": "src/main/resources/theme.json",
+  "darkTheme": "src/main/resources/dark-theme.json"
+}
