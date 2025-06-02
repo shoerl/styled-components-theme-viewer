@@ -3,7 +3,6 @@
 
 plugins {
   id("java")
-  id("org.jetbrains.kotlin.jvm") version "2.1.0"
   id("org.jetbrains.intellij.platform") version "2.6.0"
 }
 
@@ -28,7 +27,8 @@ dependencies {
         // Add necessary plugin dependencies for compilation here, example:
         // bundledPlugin("com.intellij.java")
     }
-    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.17.0")
+    implementation("com.fasterxml.jackson.core:jackson-databind:2.17.0")
+    implementation("com.fasterxml.jackson.core:jackson-core:2.17.0")
 }
 
 // IntelliJ Platform configuration from user input
@@ -55,9 +55,6 @@ tasks {
   withType<JavaCompile> {
     sourceCompatibility = "21"
     targetCompatibility = "21"
-  }
-  withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-    kotlinOptions.jvmTarget = "21"
   }
 
   // Configure runIde task to run in headless mode for CI/sandbox
