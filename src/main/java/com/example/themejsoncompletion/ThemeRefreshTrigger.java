@@ -3,157 +3,194 @@ package com.example.themejsoncompletion;
 import com.example.themejsoncompletion.settings.ThemeJsonSettingsState;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
-import java.io.FileInputStream;
+
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
+/**
+ * Utility class responsible for determining which theme files to monitor for changes
+ * and for triggering a refresh of theme data when changes are detected.
+ *
+ * It reads `theme-imports.json` (from project settings or plugin resources) to find
+ * the names of theme files. This list of names is then used by {@link ThemeJsonStartupActivity}
+ * to filter VFS events.
+ *
+ * This class also provides the {@link #refreshThemes(Project)} method, which delegates
+ * to {@link ThemeDataManager} to actually reload the theme data.
+ */
 public class ThemeRefreshTrigger {
 
+    private static final Logger LOG = Logger.getInstance(ThemeRefreshTrigger.class);
     private static final ObjectMapper objectMapper = new ObjectMapper();
-    private static List<String> cachedThemeFileNames = null; // Project specific cache might be better
-    private static long lastLoadTime = 0; // Also project specific
+
+    // Cache for theme file names. Keyed by project hash code to provide basic project-specific caching.
+    // A more robust solution might use Project as key if ThemeDataManager itself becomes a true project service
+    // or if this cache is managed within a project service.
+    private static final Map<Integer, List<String>> projectCachedThemeFileNames = new ConcurrentHashMap<>();
+    private static final Map<Integer, Long> projectLastLoadTime = new ConcurrentHashMap<>();
     private static final long CACHE_DURATION_MS = 60000; // Cache for 1 minute
 
     /**
-     * Returns a list of theme file names that the plugin should monitor for changes.
-     * These names are extracted from the values in theme-imports.json (from project or resources).
-     * The result is cached. This method needs project context to access settings.
+     * Retrieves a list of theme file names that the plugin should monitor for changes.
+     * These names are extracted from the file paths specified in the `theme-imports.json` file.
+     * The method first attempts to load `theme-imports.json` from a path configured in the
+     * project's settings. If not found or not configured, it falls back to the
+     * `theme-imports.json` bundled with the plugin resources.
      *
-     * @param project The current project.
-     * @return A list of theme file names.
+     * The results are cached per project for a short duration to avoid redundant file I/O
+     * and parsing.
+     *
+     * @param project The current IntelliJ project, used to access project-specific settings
+     *                and for caching.
+     * @return A list of unique theme file names (e.g., "my-dark-theme.json"). Returns an empty
+     *         list if `theme-imports.json` cannot be loaded or is empty.
      */
     public static synchronized List<String> getThemeFileNames(Project project) {
-        // Note: Caching here is tricky if it's static and shared across projects.
-        // For simplicity, we'll keep the static cache but acknowledge it's not ideal for multi-project scenarios
-        // unless the cache key includes project identifier or we use a project service for this cache.
-        // However, this method is called by ThemeJsonStartupActivity which is project-specific.
-        // A better approach would be for ThemeJsonStartupActivity to get this list once and store it,
-        // or for this method to not be static and be part of a project service.
+        if (project == null || project.isDisposed()) {
+            LOG.warn("Cannot get theme file names: project is null or disposed.");
+            return Collections.emptyList();
+        }
 
         long currentTime = System.currentTimeMillis();
-        if (cachedThemeFileNames != null && (currentTime - lastLoadTime) < CACHE_DURATION_MS) {
-            // This cache doesn't distinguish by project, which is a flaw if multiple projects are open
-            // and have different settings. For now, we proceed with this simplification.
-            // System.out.println("ThemeRefreshTrigger: Returning cached theme file names for project " + project.getName());
-            // return cachedThemeFileNames;
-            // Given the flaw, let's recalculate if project context is available, or make cache project-aware.
-            // For now, let's assume the call from StartupActivity is the primary one and it passes project.
+        Integer projectKey = project.hashCode(); // Simple project identifier for cache
+
+        if (projectCachedThemeFileNames.containsKey(projectKey) &&
+            (currentTime - projectLastLoadTime.getOrDefault(projectKey, 0L)) < CACHE_DURATION_MS) {
+            // LOG.debug("Returning cached theme file names for project " + project.getName());
+            return projectCachedThemeFileNames.get(projectKey);
         }
 
         Map<String, String> importMap = Collections.emptyMap();
         InputStream importMapStream = null;
-        boolean loadedFromProject = false;
+        boolean loadedFromProjectSettings = false;
+        String sourceDescription = "plugin resources"; // Default source
 
         ThemeJsonSettingsState settings = ThemeJsonSettingsState.getInstance(project);
-        String configuredPath = (settings != null) ? settings.themeImportsJsonPath : "";
-        VirtualFile themeImportsVirtualFile = null;
+        String configuredPathStr = (settings != null) ? settings.themeImportsJsonPath : null;
 
-
-        if (configuredPath != null && !configuredPath.trim().isEmpty()) {
+        if (configuredPathStr != null && !configuredPathStr.trim().isEmpty()) {
+            LOG.debug("Attempting to load theme-imports.json from configured project path: " + configuredPathStr + " for project " + project.getName());
             if (project.getBasePath() != null) {
-                themeImportsVirtualFile = LocalFileSystem.getInstance().findFileByPath(
-                        Paths.get(project.getBasePath()).resolve(configuredPath).toString()
-                );
+                Path absoluteConfiguredPath = Paths.get(project.getBasePath()).resolve(configuredPathStr);
+                VirtualFile themeImportsVirtualFile = LocalFileSystem.getInstance().findFileByNioPath(absoluteConfiguredPath);
+
                 if (themeImportsVirtualFile != null && themeImportsVirtualFile.exists()) {
                     try {
                         importMapStream = themeImportsVirtualFile.getInputStream();
-                        loadedFromProject = true;
+                        loadedFromProjectSettings = true;
+                        sourceDescription = "project settings path: " + themeImportsVirtualFile.getPath();
+                        LOG.info("Found theme-imports.json via project settings: " + themeImportsVirtualFile.getPath());
                     } catch (IOException e) {
-                        System.err.println("ThemeRefreshTrigger: Error opening configured theme-imports.json: " + e.getMessage());
-                        importMapStream = null;
+                        LOG.warn("Error opening configured theme-imports.json from '" + themeImportsVirtualFile.getPath() + "': " + e.getMessage(), e);
+                        importMapStream = null; // Ensure fallback
                     }
+                } else {
+                    LOG.warn("Configured theme-imports.json not found at project path: " + absoluteConfiguredPath);
                 }
+            } else {
+                LOG.warn("Project base path is null. Cannot resolve configured path: " + configuredPathStr);
             }
         }
 
-        if (importMapStream == null) { // Fallback to resources
+        // Fallback to resources if not loaded from project settings
+        if (importMapStream == null) {
+            LOG.info("Falling back to loading theme-imports.json from plugin resources for project " + project.getName());
             importMapStream = ThemeRefreshTrigger.class.getResourceAsStream("/theme-imports.json");
+            sourceDescription = "plugin resources"; // Update source description
         }
 
         if (importMapStream == null) {
-            System.err.println("ThemeRefreshTrigger: Critical: theme-imports.json not found in configured path or resources.");
-            cachedThemeFileNames = Collections.emptyList();
-            lastLoadTime = currentTime;
-            return cachedThemeFileNames;
+            LOG.error("Critical: theme-imports.json not found in configured path or plugin resources for project " + project.getName() + ". Theme file monitoring will be inactive.");
+            projectCachedThemeFileNames.put(projectKey, Collections.emptyList());
+            projectLastLoadTime.put(projectKey, currentTime);
+            return Collections.emptyList();
         }
 
         try {
             importMap = objectMapper.readValue(importMapStream, new TypeReference<Map<String, String>>() {});
+            LOG.debug("Successfully parsed theme-imports.json from " + sourceDescription + " for project " + project.getName());
         } catch (IOException e) {
-            System.err.println("ThemeRefreshTrigger: Error parsing theme-imports.json: " + e.getMessage());
-            importMap = Collections.emptyMap();
+            LOG.error("Error parsing theme-imports.json from " + sourceDescription + " for project " + project.getName() + ": " + e.getMessage(), e);
+            importMap = Collections.emptyMap(); // Proceed with empty map on error
         } finally {
             try {
                 importMapStream.close();
-            } catch (IOException e) { /* ignore */ }
+            } catch (IOException e) {
+                LOG.warn("Failed to close stream for theme-imports.json from " + sourceDescription, e);
+            }
         }
 
+        List<String> finalThemeFileNames;
         if (importMap.isEmpty()) {
-            cachedThemeFileNames = Collections.emptyList();
+            LOG.info("Import map from " + sourceDescription + " is empty for project " + project.getName() + ". No theme files to monitor.");
+            finalThemeFileNames = Collections.emptyList();
         } else {
-            // If loaded from project, the paths inside importMap are relative to theme-imports.json's directory.
-            // If loaded from resources, paths are relative to resources root (e.g. "theme.json" or "themes/mytheme.json").
-            // The VFS listener in ThemeJsonStartupActivity works with *absolute* paths or paths relative to project modules.
-            // For simplicity, we just extract file names. The listener checks event.getPath().endsWith(themeFileName).
-            // This means if multiple files with the same name exist (e.g. /foo/theme.json and /bar/theme.json)
-            // and "theme.json" is in our list, changes to *either* will trigger a refresh. This is usually acceptable.
-
+            // Extract just the file names from the paths in the import map.
+            // The VFS listener in ThemeJsonStartupActivity checks event.getPath().endsWith(themeFileName).
+            // This is a simple but effective way to identify relevant files.
             List<String> names = new ArrayList<>();
             for (String pathValue : importMap.values()) {
                 try {
+                    // Using Paths.get().getFileName() is robust for extracting the name part of a path.
                     names.add(Paths.get(pathValue).getFileName().toString());
-                } catch (Exception e) {
-                    System.err.println("ThemeRefreshTrigger: Invalid path in import map: " + pathValue);
+                } catch (InvalidPathException e) {
+                    LOG.warn("Invalid path string '" + pathValue + "' in import map from " + sourceDescription + ". Skipping. Error: " + e.getMessage());
                 }
             }
-            cachedThemeFileNames = names.stream().distinct().collect(Collectors.toList());
-            System.out.println("ThemeRefreshTrigger: Determined theme file names for project " + project.getName() + " (" + (loadedFromProject ? "project" : "resources") + "): " + cachedThemeFileNames);
+            finalThemeFileNames = names.stream().distinct().collect(Collectors.toList());
+            LOG.info("Determined theme file names to monitor for project " + project.getName() + " (from " + sourceDescription + "): " + finalThemeFileNames);
         }
-        lastLoadTime = currentTime;
-        return cachedThemeFileNames;
-    }
 
-    public static synchronized void clearCache() {
-        System.out.println("ThemeRefreshTrigger: Clearing cached theme file names.");
-        cachedThemeFileNames = null;
-        lastLoadTime = 0;
+        projectCachedThemeFileNames.put(projectKey, finalThemeFileNames);
+        projectLastLoadTime.put(projectKey, currentTime);
+        return finalThemeFileNames;
     }
 
     /**
-     * Placeholder method to simulate triggering a refresh of theme data.
-     * <p>
-     * In a real implementation, this would trigger reloading and re-parsing of theme
-     * JSON files and update the data structures used by {@link ThemeJsonCompletionContributor}.
-     * This might involve interacting with an application or project service that holds the theme data,
-     * or re-initializing parts of the {@link ThemeJsonCompletionContributor}.
-     * </p>
-     * @param project The current project. This parameter is included because the
-     *                {@link ThemeJsonStartupActivity} calls it with the project,
-     *                allowing future implementations to use project-specific services
-     *                if needed for the refresh logic.
+     * Clears the cache of theme file names for a specific project.
+     * This might be useful if settings change and a re-evaluation is needed sooner than cache expiry.
+     * @param project The project whose cache should be cleared.
+     */
+    public static synchronized void clearCache(Project project) {
+        if (project != null) {
+            Integer projectKey = project.hashCode();
+            projectCachedThemeFileNames.remove(projectKey);
+            projectLastLoadTime.remove(projectKey);
+            LOG.info("Cleared cached theme file names for project: " + project.getName());
+        }
+    }
+
+    /**
+     * Triggers a refresh of the theme data for the specified project.
+     * This method delegates the actual reloading and parsing of theme JSON files
+     * to the {@link ThemeDataManager} service for the given project.
+     *
+     * @param project The project for which themes should be refreshed.
      */
     public static void refreshThemes(Project project) {
         if (project == null || project.isDisposed()) {
-            System.err.println("ThemeRefreshTrigger: Project is null or disposed. Cannot refresh themes.");
+            LOG.warn("Project is null or disposed. Cannot refresh themes.");
             return;
         }
         ThemeDataManager dataManager = ThemeDataManager.getInstance(project);
         if (dataManager != null) {
-            System.out.println("ThemeRefreshTrigger: Requesting ThemeDataManager to refresh themes for project: " + project.getName());
+            LOG.info("Requesting ThemeDataManager to refresh themes for project: " + project.getName());
             dataManager.refreshThemes();
         } else {
-            System.err.println("ThemeRefreshTrigger: ThemeDataManager service not found for project: " + project.getName() + ". Cannot refresh themes.");
-            // This might happen if the plugin is being disabled or if there's an issue with service registration/initialization.
+            LOG.error("ThemeDataManager service not found for project: " + project.getName() + ". Cannot refresh themes. This may indicate an issue with plugin initialization or project setup.");
         }
     }
 }
