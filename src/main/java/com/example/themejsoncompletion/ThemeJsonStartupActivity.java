@@ -8,19 +8,37 @@ import com.intellij.openapi.vfs.newvfs.events.VFileEvent;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.util.Disposer;
 import org.jetbrains.annotations.NotNull;
+import com.intellij.openapi.Disposable; // Added import
 
 import java.util.List;
 
-public class ThemeJsonStartupActivity implements StartupActivity {
+public class ThemeJsonStartupActivity implements StartupActivity, Disposable {
+
+    @Override
+    public void dispose() {
+        // This method will be called when the project is disposed,
+        // cleaning up the message bus connection.
+        System.out.println("ThemeJsonStartupActivity: Disposing activity and message bus connection.");
+    }
 
     @Override
     public void runActivity(@NotNull Project project) {
-        // Create a disposable for the message bus connection
-        Disposable disposable = Disposer.newDisposable("ThemeJsonStartupActivityBusConnection");
-        project.getMessageBus().connect(disposable).subscribe(VirtualFileManager.VFS_CHANGES, new BulkFileListener() {
+        // Register this activity as a disposable with the project.
+        // This ensures its dispose() method is called when the project closes.
+        Disposer.register(project, this);
+
+        // Connect to the message bus using 'this' as the disposable parent.
+        // The connection will be automatically disposed when 'this' is disposed.
+        project.getMessageBus().connect(this).subscribe(VirtualFileManager.VFS_CHANGES, new BulkFileListener() {
             @Override
             public void after(@NotNull List<? extends VFileEvent> events) {
-                List<String> themeFileNames = ThemeRefreshTrigger.getThemeFileNames();
+                // Pass project to getThemeFileNames to respect project-specific settings
+                List<String> themeFileNames = ThemeRefreshTrigger.getThemeFileNames(project);
+                if (themeFileNames.isEmpty()) {
+                    // No themes configured or found to watch.
+                    return;
+                }
+
                 boolean needsRefresh = false;
                 for (VFileEvent event : events) {
                     String path = event.getPath();

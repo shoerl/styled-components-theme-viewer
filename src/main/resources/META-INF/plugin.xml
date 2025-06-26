@@ -19,5 +19,11 @@
     <completion.contributor language="JavaScript" implementation="com.example.themejsoncompletion.ThemeJsonCompletionContributor"/>
     <completion.contributor language="TypeScript" implementation="com.example.themejsoncompletion.ThemeJsonCompletionContributor"/>
     <postStartupActivity implementation="com.example.themejsoncompletion.ThemeJsonStartupActivity"/>
+    <projectService serviceImplementation="com.example.themejsoncompletion.settings.ThemeJsonSettingsState"/>
+    <projectConfigurable
+        parentId="tools"
+        instance="com.example.themejsoncompletion.settings.ThemeJsonSettingsConfigurable"
+        id="com.example.themejsoncompletion.settings.ThemeJsonSettingsConfigurable"
+        displayName="Theme JSON Autocompletion"/>
   </extensions>
 </idea-plugin>
