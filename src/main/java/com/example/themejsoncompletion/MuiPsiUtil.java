@@ -27,70 +27,125 @@ public class MuiPsiUtil {
      * @return true if it's a potential MUI theme access, false otherwise.
      */
     public static boolean isPotentialMuiThemeContext(@NotNull JSReferenceExpression refExpr) {
-        // Check 1: Are we inside a styled component template or function argument?
-        JSTaggedTemplateExpression taggedTemplate = PsiTreeUtil.getParentOfType(refExpr, JSTaggedTemplateExpression.class);
-        JSCallExpression callExpression = PsiTreeUtil.getParentOfType(refExpr, JSCallExpression.class, true, JSTaggedTemplateExpression.class); // Stop at tagged template
+        boolean inStyledCallOrTaggedTemplate = false;
 
-        boolean inStyledRelatedContext = false;
+        // Check 1: Inside JSTaggedTemplateExpression (styled`...`)
+        JSTaggedTemplateExpression taggedTemplate = PsiTreeUtil.getParentOfType(refExpr, JSTaggedTemplateExpression.class);
         if (taggedTemplate != null) {
             JSExpression tag = taggedTemplate.getTag();
-            if (tag != null && tag.getText().startsWith("styled")) {
-                // Ensure refExpr is within the template part, not the tag itself.
+            // Check if the tag is `styled.foo` or `styled(Component)`
+            if (tag instanceof JSReferenceExpression && tag.getText().startsWith("styled")) { // styled.div, styled.button
                 JSEmbeddedContent embeddedContent = PsiTreeUtil.getParentOfType(refExpr, JSEmbeddedContent.class);
                 if (embeddedContent != null && PsiTreeUtil.isAncestor(taggedTemplate, embeddedContent, true)) {
-                    inStyledRelatedContext = true;
+                    inStyledCallOrTaggedTemplate = true;
+                }
+            } else if (tag instanceof JSCallExpression && tag.getText().startsWith("styled")) { // styled(Component)
+                JSEmbeddedContent embeddedContent = PsiTreeUtil.getParentOfType(refExpr, JSEmbeddedContent.class);
+                if (embeddedContent != null && PsiTreeUtil.isAncestor(taggedTemplate, embeddedContent, true)) {
+                    inStyledCallOrTaggedTemplate = true;
                 }
             }
         }
 
-        if (!inStyledRelatedContext && callExpression != null) {
-            // This handles styled(Component)(props => ...) or styled(Component)({ theme => ... })
-            // We need to check if the callExpression is the one applying the styles (the second call in curried form, or the main call if direct object styles)
-            JSExpression methodExpr = callExpression.getMethodExpression(); // Could be `styled(Button)` or `styled.div`
-            if (methodExpr != null && methodExpr.getText().startsWith("styled")) {
-                 // Check if refExpr is inside an arrow function or function expression that is an argument to this call
-                PsiElement argParent = PsiTreeUtil.getParentOfType(refExpr, JSArrowFunction.class, JSFunction.class);
-                if (argParent != null && PsiTreeUtil.isAncestor(callExpression.getArgumentList(), argParent, false)){
-                    inStyledRelatedContext = true;
+        // Check 2: Inside JSCallExpression (styled(Component)(args...) or styled.div(args...))
+        if (!inStyledCallOrTaggedTemplate) {
+            // Iterate upwards to find the relevant "styled" call.
+            // We are looking for `styled(...)` or `styled.foo(...)` or `styled(Bar)(...)`
+            // The refExpr should be inside a function argument of one of these.
+            PsiElement current = refExpr;
+            while (current != null && !(current instanceof PsiFile)) {
+                if (current instanceof JSCallExpression) {
+                    JSCallExpression callExpr = (JSCallExpression) current;
+                    JSExpression methodExpression = callExpr.getMethodExpression();
+                    String methodText = methodExpression != null ? methodExpression.getText() : "";
+
+                    boolean isStyledCall = false;
+                    if (methodText.startsWith("styled")) { // Covers styled.div(), styled(Component)()
+                        isStyledCall = true;
+                    } else if (methodExpression instanceof JSReferenceExpression) {
+                        // Handles the case of styled(Component)(args) where methodExpression is the `styled(Component)` part
+                        JSExpression qualifier = ((JSReferenceExpression) methodExpression).getQualifier();
+                        if (qualifier instanceof JSCallExpression && qualifier.getText().startsWith("styled")) {
+                           // This means `methodExpression` is the result of `styled(Component)`, so `callExpr` is the one with style function
+                           isStyledCall = true;
+                        }
+                    }
+
+
+                    if (isStyledCall) {
+                        // Check if refExpr is within an argument of this styled call, specifically in a function
+                        PsiElement argParentFunction = PsiTreeUtil.getParentOfType(refExpr, JSArrowFunction.class, JSFunction.class);
+                        if (argParentFunction != null && PsiTreeUtil.isAncestor(callExpr.getArgumentList(), argParentFunction, false)) {
+                            inStyledCallOrTaggedTemplate = true;
+                            break; // Found the styled context
+                        }
+                    }
                 }
-            } else {
-                 // Check for curried styled(Component)(({theme}) => ...)
-                 // Here, callExpression is the outer call, e.g. styled(Button). The methodExpr is styled.
-                 // The actual theme access is in an argument to a *subsequent* call expression.
-                 // This case is complex; the current logic might catch it if the inner function call is the `callExpression`
-                 // due to the stop condition in PsiTreeUtil.getParentOfType.
-                 // A more robust way is to check if this callExpression's result is then called.
-                 // For now, the existing logic might cover it if `refExpr` is inside the inner function.
+                current = current.getParent();
             }
         }
 
-        if (!inStyledRelatedContext) {
-            // Also consider cases like sx prop: <Box sx={{ color: 'primary.main' }} />
-            // This is more complex as it requires knowledge of specific prop names and component names.
-            // Out of scope for this utility for now, but could be an extension.
-            return false;
+        if (!inStyledCallOrTaggedTemplate) {
+            return false; // Not in a recognized styled-component structure
         }
 
-        // Check 2: Does the reference chain start with 'theme' or 'props.theme'?
+        // Check 3: Does the reference chain start with 'theme' or 'props.theme'?
+        // This check is crucial to ensure we are actually trying to access the theme.
         JSReferenceExpression outermostRef = refExpr;
         while (outermostRef.getQualifier() instanceof JSReferenceExpression) {
             outermostRef = (JSReferenceExpression) outermostRef.getQualifier();
         }
 
         String baseName = outermostRef.getReferenceName();
-        if ("theme".equals(baseName)) return true;
+        if (baseName == null) return false;
 
-        if ("props".equals(baseName)) {
+        if (baseName.equals("theme")) {
+            return true; // Directly accessing `theme.something`
+        }
+
+        if (baseName.equals("props")) {
             // If base is 'props', the full reference must be 'props.theme...'
-            // We need to check the actual path segments.
-            // A simple text check on the full reference can be a starting point.
-            PsiElement fullRefElement = PsiTreeUtil.getTopmostParentOfType(refExpr, JSReferenceExpression.class);
-            if (fullRefElement != null && fullRefElement.getText().startsWith("props.theme")) {
+            // We check this by looking at the segments of the original refExpr.
+            List<String> segments = extractThemePathSegmentsFromFullChain(refExpr); // Use a helper that gives ["props", "theme", ...]
+            if (segments.size() >= 2 && segments.get(0).equals("props") && segments.get(1).equals("theme")) {
                 return true;
             }
         }
         return false;
     }
+
+    /**
+     * Helper to get all segments of a JSReferenceExpression chain, e.g., props.theme.palette -> ["props", "theme", "palette"]
+     */
+    @NotNull
+    private static List<String> extractThemePathSegmentsFromFullChain(@Nullable JSReferenceExpression fullReferenceExpression) {
+        if (fullReferenceExpression == null) {
+            return Collections.emptyList();
+        }
+        List<String> pathSegments = new ArrayList<>();
+        JSReferenceExpression currentRef = fullReferenceExpression;
+        while (currentRef != null) {
+            String refName = currentRef.getReferenceName();
+            if (refName != null) {
+                pathSegments.add(0, refName);
+            } else {
+                PsiElement lastChild = currentRef.getLastChild();
+                if (lastChild != null && lastChild.getNode().getElementType().toString().equals("JS:IDENTIFIER")) {
+                    pathSegments.add(0, lastChild.getText());
+                } else {
+                    return Collections.emptyList(); // Invalid segment
+                }
+            }
+            PsiElement qualifier = currentRef.getQualifier();
+            if (qualifier instanceof JSReferenceExpression) {
+                currentRef = (JSReferenceExpression) qualifier;
+            } else {
+                currentRef = null;
+            }
+        }
+        return pathSegments;
+    }
+
 
     /**
      * Extracts the path segments (e.g., ["palette", "primary", "main"]) from a
