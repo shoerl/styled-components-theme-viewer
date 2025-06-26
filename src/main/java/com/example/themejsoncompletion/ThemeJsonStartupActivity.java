@@ -1,5 +1,6 @@
 package com.example.themejsoncompletion;
 
+import com.example.themejsoncompletion.settings.ThemeJsonSettingsState;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
@@ -10,92 +11,84 @@ import com.intellij.openapi.vfs.newvfs.BulkFileListener;
 import com.intellij.openapi.vfs.newvfs.events.VFileEvent;
 import org.jetbrains.annotations.NotNull;
 
+import java.nio.file.Paths;
 import java.util.List;
 
 /**
  * A {@link StartupActivity} that runs when a project is opened.
- * This activity is responsible for setting up a {@link BulkFileListener} to monitor
- * changes in theme JSON files. If a relevant theme file is changed, it triggers
- * a refresh of the theme data via {@link ThemeRefreshTrigger}.
- *
- * It implements {@link Disposable} and registers itself with the project
- * to ensure that the VFS listener is properly cleaned up when the project is closed,
- * preventing memory leaks.
+ * This activity sets up a {@link BulkFileListener} to monitor changes in:
+ * 1. JSON theme files (names derived from `theme-imports.json` via {@link ThemeRefreshTrigger}).
+ * 2. The configured MUI theme file (JS/TS) from {@link ThemeJsonSettingsState}.
+ * If a relevant file changes, it triggers a refresh of theme data.
  */
 public class ThemeJsonStartupActivity implements StartupActivity, Disposable {
 
     private static final Logger LOG = Logger.getInstance(ThemeJsonStartupActivity.class);
 
-    /**
-     * Called when the project is disposed or the plugin is unloaded.
-     * This method handles the cleanup of resources, specifically the VFS listener
-     * connection to the message bus.
-     */
     @Override
     public void dispose() {
-        // The message bus connection established in runActivity using project.getMessageBus().connect(this)
-        // will be automatically disposed because 'this' (ThemeJsonStartupActivity instance)
-        // is registered as a disposable with the project. No explicit disconnect is needed here
-        // if Disposer.register(project, this) was called.
-        LOG.info("Disposing ThemeJsonStartupActivity and its associated message bus connection.");
+        LOG.info("Disposing ThemeJsonStartupActivity and its VFS listener connection.");
     }
 
-    /**
-     * The main entry point for the startup activity.
-     * It registers this activity as a {@link Disposable} with the project,
-     * then sets up a VFS listener to detect changes in theme files.
-     *
-     * @param project The project that has just been opened.
-     */
     @Override
     public void runActivity(@NotNull Project project) {
-        // Register this activity as a disposable with the project.
-        // This ensures its dispose() method is called when the project closes,
-        // which in turn ensures the message bus connection is cleaned up.
         Disposer.register(project, this);
 
-        // Connect to the message bus using 'this' as the disposable parent.
-        // The connection will be automatically disposed when 'this' (the activity) is disposed.
         project.getMessageBus().connect(this).subscribe(VirtualFileManager.VFS_CHANGES, new BulkFileListener() {
             @Override
             public void after(@NotNull List<? extends VFileEvent> events) {
-                // Pass project to getThemeFileNames to respect project-specific settings
-                // and to allow ThemeRefreshTrigger to potentially use project-specific caching.
-                List<String> themeFileNamesToWatch = ThemeRefreshTrigger.getThemeFileNames(project);
+                // Get JSON theme file names to watch (e.g., "dark-theme.json")
+                List<String> jsonThemeFileNamesToWatch = ThemeRefreshTrigger.getThemeFileNames(project);
 
-                if (themeFileNamesToWatch.isEmpty()) {
-                    // LOG.debug("No theme files configured or found to watch for project: " + project.getName());
+                // Get the configured MUI theme file path (project-relative)
+                ThemeJsonSettingsState settings = ThemeJsonSettingsState.getInstance(project);
+                String muiThemeRelativePath = (settings != null) ? settings.muiThemeFilePath : null;
+                String muiThemeAbsolutePath = null;
+
+                if (muiThemeRelativePath != null && !muiThemeRelativePath.trim().isEmpty() && project.getBasePath() != null) {
+                    try {
+                        muiThemeAbsolutePath = Paths.get(project.getBasePath()).resolve(muiThemeRelativePath).normalize().toString();
+                    } catch (Exception e) {
+                        LOG.warn("Could not resolve MUI theme absolute path from relative: " + muiThemeRelativePath, e);
+                    }
+                }
+
+                if (jsonThemeFileNamesToWatch.isEmpty() && muiThemeAbsolutePath == null) {
+                    // LOG.debug("No theme files (JSON or MUI) configured to watch for project: " + project.getName());
                     return;
                 }
 
                 boolean needsRefresh = false;
                 for (VFileEvent event : events) {
-                    String path = event.getPath();
-                    if (path != null) {
-                        for (String themeFileName : themeFileNamesToWatch) {
-                            // Simple check: does the path end with one of the configured theme file names?
-                            // This is a basic check and might lead to false positives if theme file names
-                            // are very generic (e.g., "index.json") and appear in many non-theme contexts.
-                            // A more robust check might involve verifying if the path is under a recognized
-                            // theme directory or matches a more specific pattern from settings.
-                            if (path.endsWith(themeFileName)) {
-                                LOG.info("Detected change in a potential theme file: " + path + " for project: " + project.getName());
-                                needsRefresh = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (needsRefresh) {
+                    String eventPath = event.getPath();
+                    if (eventPath == null) continue;
+
+                    // Check if it's the MUI theme file
+                    if (muiThemeAbsolutePath != null && eventPath.equals(muiThemeAbsolutePath)) {
+                        LOG.info("Detected change in configured MUI theme file: " + eventPath + " for project: " + project.getName());
+                        needsRefresh = true;
                         break;
                     }
+
+                    // Check if it's one of the JSON theme files
+                    for (String jsonThemeFileName : jsonThemeFileNamesToWatch) {
+                        if (eventPath.endsWith("/" + jsonThemeFileName) || eventPath.endsWith("\\" + jsonThemeFileName) || eventPath.equals(jsonThemeFileName) ) {
+                             // Check endsWith for full name, possibly with directory separator
+                            LOG.info("Detected change in a potential JSON theme file: " + eventPath + " (watching for name: " + jsonThemeFileName + ") for project: " + project.getName());
+                            needsRefresh = true;
+                            break;
+                        }
+                    }
+                    if (needsRefresh) break;
                 }
 
                 if (needsRefresh) {
-                    LOG.info("A theme JSON file relevant to project " + project.getName() + " changed. Triggering theme data refresh.");
+                    LOG.info("A relevant theme file (JSON or MUI) changed for project " + project.getName() + ". Triggering theme data refresh.");
+                    // ThemeRefreshTrigger.refreshThemes calls ThemeDataManager.refreshThemes() which now handles both.
                     ThemeRefreshTrigger.refreshThemes(project);
                 }
             }
         });
-        LOG.info("Registered VFS listener for theme file changes for project: " + project.getName());
+        LOG.info("Registered VFS listener for JSON and MUI theme file changes for project: " + project.getName());
     }
 }

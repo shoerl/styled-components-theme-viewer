@@ -8,22 +8,33 @@
   
   <!-- JavaScript/TypeScript support (bundled in IU) -->
   <depends>JavaScript</depends>
-  <depends>NodeJS</depends>
+  <depends>NodeJS</depends> <!-- Or com.intellij.lang.javascript if just JS/TS PSI is needed -->
   
   <vendor email="you@example.com" url="https://example.com">Your Name</vendor>
   <description>
-    Provides autocomplete for keys in theme.json within JS/TS/JSX/TSX files.
+    Provides autocomplete, inlay hints, and hover information for MUI theme values in styled-components (JS/TS). Also supports generic theme.json autocompletion.
   </description>
 
   <extensions defaultExtensionNs="com.intellij">
+    <!-- Completion -->
     <completion.contributor language="JavaScript" implementation="com.example.themejsoncompletion.ThemeJsonCompletionContributor"/>
     <completion.contributor language="TypeScript" implementation="com.example.themejsoncompletion.ThemeJsonCompletionContributor"/>
+
+    <!-- Inlay Hints -->
+    <inlayHintsProvider language="JavaScript" implementation="com.example.themejsoncompletion.MuiThemeInlayHintsProvider"/>
+    <inlayHintsProvider language="TypeScript" implementation="com.example.themejsoncompletion.MuiThemeInlayHintsProvider"/>
+
+    <!-- Documentation (Hover) -->
+    <documentationProvider language="JavaScript" implementation="com.example.themejsoncompletion.MuiThemeDocumentationProvider"/>
+    <documentationProvider language="TypeScript" implementation="com.example.themejsoncompletion.MuiThemeDocumentationProvider"/>
+
+    <!-- Other Services -->
     <postStartupActivity implementation="com.example.themejsoncompletion.ThemeJsonStartupActivity"/>
     <projectService serviceImplementation="com.example.themejsoncompletion.settings.ThemeJsonSettingsState"/>
     <projectConfigurable
         parentId="tools"
         instance="com.example.themejsoncompletion.settings.ThemeJsonSettingsConfigurable"
         id="com.example.themejsoncompletion.settings.ThemeJsonSettingsConfigurable"
-        displayName="Theme JSON Autocompletion"/>
+        displayName="MUI Theme &amp; JSON Autocompletion"/>
   </extensions>
 </idea-plugin>

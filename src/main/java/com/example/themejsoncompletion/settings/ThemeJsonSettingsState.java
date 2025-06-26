@@ -16,10 +16,9 @@ import org.jetbrains.annotations.Nullable;
  * The settings are stored on a per-project basis in a file named `themeJsonCompletionSettings.xml`
  * within the project's `.idea` directory (or an equivalent configuration directory).
  *
- * Currently, it stores a single setting:
- * - {@code themeImportsJsonPath}: A string representing the path to the `theme-imports.json`
- *   file, relative to the project root. If this path is empty or not set, the plugin
- *   is expected to fall back to using a default `theme-imports.json` from its own resources.
+ * It stores:
+ * - {@code themeImportsJsonPath}: Path to `theme-imports.json` for generic JSON themes.
+ * - {@code muiThemeFilePath}: Path to the JavaScript/TypeScript MUI theme file.
  */
 @State(
         name = "com.example.themejsoncompletion.settings.ThemeJsonSettingsState",
@@ -30,9 +29,15 @@ public class ThemeJsonSettingsState implements PersistentStateComponent<ThemeJso
     /**
      * Path to the `theme-imports.json` file, relative to the project root.
      * An empty string indicates that the default `theme-imports.json` from
-     * the plugin's resources should be used.
+     * the plugin's resources should be used for generic JSON themes.
      */
     public String themeImportsJsonPath = "";
+
+    /**
+     * Path to the MUI theme file (e.g., theme.ts or theme.js), relative to the project root.
+     * An empty string indicates that MUI theme features should be disabled or may not function.
+     */
+    public String muiThemeFilePath = "src/theme.ts"; // Default common path
 
     /**
      * Retrieves the singleton instance of {@link ThemeJsonSettingsState} for the given project.
